@@ -166,17 +166,23 @@ document.body.appendChild(canvas);
 
         // Рендер-цикл
         renderer.setAnimationLoop((timestamp, frame) => {
-          if (frame && refSpace && hitTestSource) {
-            const results = frame.getHitTestResults(hitTestSource);
-            if (results.length > 0) {
-              reticle.visible = true;
-              reticle.matrix.fromArray(results[0].getPose(refSpace).transform.matrix);
-            } else {
-              reticle.visible = false;
-            }
-          }
-          renderer.render(scene, camera);
-        });
+  if (!frame) return;
+
+  // Обновляем камеру из XR-сессии
+  renderer.xr.updateCamera(camera, frame);
+
+  if (refSpace && hitTestSource) {
+    const results = frame.getHitTestResults(hitTestSource);
+    if (results.length > 0) {
+      reticle.visible = true;
+      reticle.matrix.fromArray(results[0].getPose(refSpace).transform.matrix);
+    } else {
+      reticle.visible = false;
+    }
+  }
+
+  renderer.render(scene, camera);
+});
 
         // Обработка выхода из AR
         session.addEventListener('end', () => {
