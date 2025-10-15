@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebXR AR с importmap</title>
+
+  <!-- Import Map: связывает "three" с реальными URL -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+      "three/examples/jsm/loaders/GLTFLoader": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/loaders/GLTFLoader.js"
+    }
+  }
+  </script>
+
+  <style>
+    body {
+      color: white;
+      font-family: sans-serif;
+    }
+    #start {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 14px 28px;
+      font-size: 18px;
+      background: #007aff;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      z-index: 1000;
+      cursor: pointer;
+    }
+    #log {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 12px;
+      color: yellow;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="log">Готово к запуску</div>
+  <button id="start">Войти в AR</button>
+
+  <!-- Главный скрипт как модуль -->
+  <script type="module">
+    function log(msg) {
+      document.getElementById('log').textContent = msg;
+      console.log(msg);
+    }
+
+    document.getElementById('start').addEventListener('click', async () => {
+      try {
+        log('Запрос AR-сессии...');
+        const session = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['hit-test']
+        });
+        log('Сессия получена');
+
+        // Динамический импорт через importmap
+        const THREE = await import('three');
+        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader');
+
+        log('Three.js загружен');
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera();
+        scene.add(camera);
+
+        const debugCube = new THREE.Mesh(
+  new THREE.BoxGeometry(0.1, 0.1, 0.1),
+  new THREE.MeshBasicMaterial({ color: 0xff0000 })
+);
+debugCube.position.set(0, 0, -0.5); // перед камерой
+debugCube.rotation.x = Math.PI / 2;
+debugCube.rotation.y = Math.PI / 3;
+debugCube.rotation.z = Math.PI / 4;
+scene.add(debugCube);
+
+        const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  alpha: true,
+  premultipliedAlpha: false
+});
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+// === КРИТИЧЕСКИЕ СТИЛИ ДЛЯ XIAOMI ===
+const canvas = renderer.domElement;
+Object.assign(canvas.style, {
+  position: 'absolute',
+  top: '0',
+  left: '0',
+  width: '100%',
+  height: '100%',
+  display: 'block',
+  zIndex: '0'
+});
+
+renderer.xr.enabled = true;
+document.body.appendChild(canvas);
+
+        // Ретикл (индикатор плоскости)
+        const reticle = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.1, 0.1, 0.001, 32),
+          new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.8
+          })
+        );
+        reticle.rotation.x = Math.PI / 2;
+        reticle.visible = false;
+        scene.add(reticle);
+
+        // Загрузка модели
+        let model = null;
+        const loader = new GLTFLoader();
+        loader.load(
+          'model.glb',
+          (gltf) => {
+            model = gltf.scene;
+            model.visible = false;
+            model.scale.set(1.0, 1.0, 1.0); // Настройте под вашу модель
+            scene.add(model);
+            log('Модель загружена');
+          },
+          undefined,
+          (error) => {
+            log('Ошибка загрузки model.glb: ' + error.message);
+          }
+        );
+
+        // Размещение модели по касанию
+        renderer.domElement.addEventListener('touchstart', () => {
+          if (model && !model.visible && reticle.visible) {
+            model.position.copy(reticle.position);
+            model.visible = true;
+            log('Модель размещена');
+          }
+        });
+
+        // Подключаем AR-сессию
+        renderer.xr.setSession(session);
+
+        let hitTestSource = null;
+        let refSpace = null;
+
+        // Запрос reference space и hit-test source
+        session.requestReferenceSpace('local').then((rs) => {
+          refSpace = rs;
+          return session.requestHitTestSource({ space: refSpace });
+        }).then((source) => {
+          hitTestSource = source;
+          log('Hit-test готов');
+        }).catch((err) => {
+          log('Ошибка hit-test: ' + err.message);
+        });
+
+        // Рендер-цикл
+        renderer.setAnimationLoop((timestamp, frame) => {
+          if (frame && refSpace && hitTestSource) {
+            const results = frame.getHitTestResults(hitTestSource);
+            if (results.length > 0) {
+              reticle.visible = true;
+              reticle.matrix.fromArray(results[0].getPose(refSpace).transform.matrix);
+            } else {
+              reticle.visible = false;
+            }
+          }
+          renderer.render(scene, camera);
+        });
+
+        // Обработка выхода из AR
+        session.addEventListener('end', () => {
+          document.body.removeChild(renderer.domElement);
+          document.getElementById('start').style.display = 'block';
+        });
+
+        document.getElementById('start').style.display = 'none';
+        log('AR запущен — наведите на пол');
+
+      } catch (err) {
+        const msg = err.message || err.toString() || 'Неизвестная ошибка';
+        log('Ошибка: ' + msg);
+        alert('Ошибка:\n' + msg);
+      }
+    });
+  </script>
+</body>
+</html>
